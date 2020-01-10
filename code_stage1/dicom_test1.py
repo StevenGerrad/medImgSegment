@@ -394,13 +394,15 @@ print (training_data)
 #       https://blog.csdn.net/weixin_43330946/article/details/89576759
 # 
 ###################################################################################
-'''
+
+
 
 import numpy as np
 import os                #遍历文件夹
 import nibabel as nib    #nii格式一般都会用到这个包
 import imageio           #转换成图像
 from matplotlib import pyplot as plt
+import cv2
  
 def nii_to_image(niifile):
     filenames = os.listdir(filepath)  #读取nii文件夹
@@ -412,28 +414,70 @@ def nii_to_image(niifile):
         img = nib.load(img_path)                #读取nii
         img_fdata = img.get_fdata()
         fname = f.replace('.nii','')            #去掉nii的后缀名
-        img_f_path = os.path.join(imgfile, fname)
+        # img_f_path = os.path.join(imgfile, fname)
         #创建nii对应的图像的文件夹
-        if not os.path.exists(img_f_path):
-            os.mkdir(img_f_path)                #新建文件夹
+        # if not os.path.exists(img_f_path):
+            # os.mkdir(img_f_path)                #新建文件夹
  
-        #开始转换为图像
+        #开始转换为图像 (512, 512, 150)
         (x,y,z) = img.shape
         for i in range(0,z):                      #z是图像的序列
-            silce = img_fdata[:, :, i]          #选择哪个方向的切片都可以
-            if i < 70 :
-                continue
+            silce = img_fdata[:, :, i]  #选择哪个方向的切片都可以
+            
+            slice_trans.append(silce)
+            # if i < 70 :
+            #     continue
             # if np.where(silce!=0)[0].shape[0]!=0:
                 # print('this is not a zeros matrix')
-            plt.imshow(silce),plt.show()
-            # imageio.imwrite(os.path.join(img_f_path,'{}.png'.format(i)), silce)
-                                                #保存图像
+            # plt.imshow(silce), plt.show()
+            #保存图像
+            # imageio.imwrite(os.path.join(img_f_path, '{}.png'.format(i)), silce)
+    
+    return slice_trans
+
+def get_image_file(file_dir):
+    image_data = []
+    files = os.listdir(file_dir)
+    files.sort(key= lambda x:int(x[:-4]))
+    for file in files:
+        if os.path.splitext(file)[1] == '.npy':
+            img_item = np.load(file_dir + file)
+            image_data.append(img_item)
+    return image_data
  
 if __name__ == '__main__':
-    filepath = 'medImgSegment/imgData/seg12190000'
-    imgfile = 'medImgSegment/imgData/test0'
-    nii_to_image(filepath)
-'''
+    filepath = './imgData/seg12190000'
+    label = nii_to_image(filepath)
+    file_dir = './Documents/dicom2npy_75989854/'
+    image_data = get_image_file(file_dir)
+
+    imgfile = './imgData/label/'
+    for i in range(len(image_data)):
+        filename_item = imgfile + str(i + 1)
+        img_item = image_data[i]
+
+        # 简单对 img 进行处理
+        img_item[img_item < 0] = 0
+        img_item[img_item > 512] = 512
+        # img_item.dtype = np.uint8
+        img_item = img_item.astype(np.uint8)
+        
+        # 不知道为什么只有这样才能整出来
+        label_item = label[149-i]
+        label_item = np.rot90(label_item, -1)
+        label_item = np.flip(label_item, 1)
+
+        # 图片做成三通道查看一下效果
+        img_item = cv2.merge([img_item, img_item, img_item])
+        img_item[label_item > 0] = img_item[label_item > 0] * 0.6 + (80, 0, 0)
+        
+        # imageio.imwrite(os.path.join(imgfile, '{}.png'.format(i)), img_item)
+        # imageio.imwrite(os.path.join(imgfile, '{}.png'.format(i)), label_item)
+        # 保存调试好的label, 反序 + 左右翻转 + 旋转-1*90
+        np.save(os.path.join(imgfile, '{}.npy'.format(i)), label_item)
+        print(i)
+
+
 
 
 ###################################################################################
@@ -445,6 +489,7 @@ if __name__ == '__main__':
 # 
 ###################################################################################
 
+'''
 
 import SimpleITK as sitk
 import numpy as np
@@ -454,41 +499,53 @@ import os
 # import Image
 
 count = 1
-# path = "D:/MINE_FILE/dataSet/CTA/12190000/"
-path = "medImgSegment/imgData/CTA_test1/"
+path = "D:/MINE_FILE/dataSet/CTA/12190000/"
+# path = "medImgSegment/imgData/CTA_test1/"
 filename = os.listdir(path)
 print (filename)
 
 def convert_from_dicom_to_jpg(img,low_window,high_window,save_path):
     lungwin = np.array([low_window*1.,high_window*1.])
-    newimg = (img-lungwin[0])/(lungwin[1]-lungwin[0])
+    # newimg = (img-lungwin[0])/(lungwin[1]-lungwin[0])
+    img[img < 0] = 0
+    img[img > 511] = 511
+    newimg = (img-0.0)/(512.0)
     newimg = (newimg*255).astype('uint8')
     cv2.imwrite(save_path, newimg, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
 
 for i in filename:      # 这样转出的文件数量比源文件多了好多
     document = os.path.join(path,i)
-    # outputpath = "medImgSegment/Documents/dicom2jpg"
-    outputpath = "medImgSegment/Documents/dicom2npy"
+    # outputpath = "./Documents/dicom2jpg"
+    outputpath = "./Documents/dicom2npy_test"
     countname = str(count)
     # countfullname = countname + '.jpg'
     countfullname = countname + '.npy'
-    output_jpg_path = os.path.join(outputpath,countfullname)
-
-    if __name__ == '__main__':
-
-        ds_array = sitk.ReadImage(document)
-        img_array = sitk.GetArrayFromImage(ds_array)
+    output_jpg_path = os.path.join(outputpath, countfullname)
     
-        shape = img_array.shape#name.shape
-        img_array = np.reshape(img_array, (shape[1], shape[2]))
-        high = np.max(img_array)
-        low = np.min(img_array)
-        # convert_from_dicom_to_jpg(img_array, low, high, output_jpg_path)
-        np.save(output_jpg_path,img_array)
-        print('FINISHED')
+    ds_array = sitk.ReadImage(document)
+    img_array = sitk.GetArrayFromImage(ds_array)
+
+    shape = img_array.shape     #name.shape
+    img_array = np.reshape(img_array, (shape[1], shape[2]))
+    high = np.max(img_array)
+    low = np.min(img_array)
+
+    # convert_from_dicom_to_jpg(img_array, low, high, output_jpg_path)
+
+    # 12190000 中有三个数据集, 试试是不是后面那一个
+    if count > 342:
+        outputpath = "./Documents/dicom2npy_test"
+        countname = str(count-342)
+        # countfullname = countname + '.jpg'
+        countfullname = countname + '.npy'
+        output_jpg_path = os.path.join(outputpath, countfullname)
+        np.save(output_jpg_path, img_array)
+    
+    print('FINISHED',count-342)
 
     count = count + 1
 
+'''
 
 
 ###################################################################################
