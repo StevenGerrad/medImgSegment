@@ -119,7 +119,7 @@ class trainData():
         self.image_data = image_data
         return image_data
     
-    def decode(self, image, min=0.0, max=255.0):
+    def im_handle(self, image, min=0.0, max=255.0):
         image[image < min] = min
         image[image > max] = max
         image = image / max
@@ -175,7 +175,7 @@ class trainData():
         # 此时数据范围较大, 对某范围内数值进行压缩处理, 其余直接取极值
         l_temp = []
         for i in self.image_data:
-            i = self.decode(i, 0.0, 300.0)
+            i = self.im_handle(i, 0.0, 300.0)
             l_temp.append(i)
         self.image_data = l_temp
 
@@ -233,8 +233,75 @@ class trainData():
         return train_data,train_label
         # return self.image_data, self.label_data
 
-def train_model(net, xx, yy, EPOCH=100, learning_rate=0.05):
-    optimizer = torch.optim.Adam(net.parameters(), lr=learning_rate)
+class Divide:
+    def __init__(self, b_w, b_h):
+        '''
+        b_w: block width
+        b_h: block height
+        '''
+        self.block_width = b_w
+        self.block_height = b_h
+
+    def encode(self, mat):
+        (W, H) = mat.shape
+        # (192, 168)->(24,21)
+        w_len = int(W / self.block_width)
+        h_len = int(H / self.block_height)
+        res = np.zeros((self.block_width * self.block_height, w_len * h_len))
+        for i in range(h_len):
+            for j in range(w_len):
+                temp = mat[j * self.block_width:(j + 1) * self.block_width,
+                           i * self.block_height:(i + 1) * self.block_height]
+                temp = temp.reshape(self.block_width * self.block_height)
+                res[:, i * w_len + j] = temp
+        return res
+
+    def decode(self, mat, W, H):
+        '''
+        mat.shape should be ( block_width*block_height, ~ = 24*21 )
+        '''
+        w_len = int(W / self.block_width)
+        h_len = int(H / self.block_height)
+        mat = mat.reshape(self.block_width * self.block_height, w_len * h_len)
+        
+        res = np.zeros((W, H))
+        for i in range(h_len):
+            for j in range(w_len):
+                temp = mat[:, i * w_len + j]
+                temp = temp.reshape(self.block_width, self.block_height)
+                res[j * self.block_width:(j + 1) * self.block_width,
+                    i * self.block_height:(i + 1) * self.block_height] = temp
+        return res
+
+
+def iou(img_true, img_pred):
+    img_true = torch.squeeze(img_true)
+    img_pred = torch.squeeze(img_pred) 
+    img_pred = (img_pred > 0).float()
+    i = (img_true * img_pred).sum()
+    u = (img_true + img_pred).sum()
+    return i / u if u != 0 else uint8
+
+if __name__ == "__main__":
+    # 处理源图像与标记数据
+    trainDataLoader = trainData()
+    # 这个函数目的其实是为了检查一下标记和数据有没有对上
+    trainDataLoader.test_show()
+
+    im_channel = 5
+    # TODO:im_size为(128,128)
+    imgSize = (128,128)
+    xx, yy = trainDataLoader.get_train_data(number=5,batch_size=1,channel=im_channel,im_size=imgSize)
+
+    # 运行unet
+    model = Unet(in_ch=im_channel,out_ch=1)
+    print(model)
+    
+    # train_model(model,x,y,100,0.05)
+    EPOCH = 2
+    learning_rate = 0.05
+    
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     # loss_func = torch.nn.CrossEntropyLoss()
     # loss_func = torch.nn.BCELoss()
     loss_func = torch.nn.BCEWithLogitsLoss()
@@ -250,7 +317,7 @@ def train_model(net, xx, yy, EPOCH=100, learning_rate=0.05):
         # 取 80% 数据做训练集
         ind_test = int(len(xx)*0.8)
         for step, b_x in enumerate(xx[0:ind_test]):
-            output = net(b_x)  # cnn output
+            output = model(b_x)  # cnn output
 
             # reference: https://www.pytorchtutorial.com/pytorch-u-net/ 但不好用
             # permute such that number of desired segments would be on 4th dimension
@@ -272,7 +339,7 @@ def train_model(net, xx, yy, EPOCH=100, learning_rate=0.05):
             optimizer.step()
 
             if step % 1 == 0:
-                pred = net(b_x)
+                pred = model(b_x)
                 # print("\r" + 'Epoch: ' + str(epoch) + ' step: ' + str(step) + '[' +">>>" * int(step / 10) + ']',end=' ')
                 print('Epoch:{} step:{}'.format(epoch, step),'loss: %.6f' % loss.data.numpy())
                 train_loss_history.append(loss.data.numpy())
@@ -281,46 +348,53 @@ def train_model(net, xx, yy, EPOCH=100, learning_rate=0.05):
         
         # test
         for step, b_x in enumerate(xx[ind_test:]):
-            output = net(b_x)  # cnn output
+            output = model(b_x)  # cnn output
             # loss = loss_func(output, yy[step])
             loss = loss_func(torch.squeeze(output), torch.squeeze(yy[step]))
             
-            # clear gradients for this training step
             optimizer.zero_grad()
             loss.backward()  # backpropagation, compute gradients
             optimizer.step()  # apply gradients
 
             if step % 1 == 0:
-                # print("\r" + 'Epoch: ' + str(epoch) + ' step: ' + str(step) + '[' +">>>" * int(step / 10) + ']',end=' ')
                 print('Test Epoch:{} step:{}'.format(epoch, step), 'loss: %.6f' % loss.data.numpy(), end='')
                 test_loss_history.append(loss.data.numpy())
                 print(iou(output, yy[step]))
-                # print('loss: %.4f' % loss.data.numpy(), '| accuracy: %.4f' % accuracy, end=' ')
-                # print('loss: %.4f' % loss.data.numpy(), end=' ')
 
-def iou(img_true, img_pred):
-    img_true = torch.squeeze(img_true)
-    img_pred = torch.squeeze(img_pred) 
-    img_pred = (img_pred > 0).float()
-    i = (img_true * img_pred).sum()
-    u = (img_true + img_pred).sum()
-    return i / u if u != 0 else uint8
+        _, figs = plt.subplots(2, 4)
+        for i in range(2):
+            for j in range(4):
+                index = random.choice(range(ind_test,len(xx)))
+                img_item = xx[index]
+                label_item = yy[index]
 
-if __name__ == "__main__":
-    # 处理源图像与标记数据
-    trainDataLoader = trainData()
-    # 这个函数目的其实是为了检查一下标记和数据有没有对上
-    # trainDataLoader.test_show()
+                # temp = img_item.shape
+                # pre_item = np.zeros(label_item.shape, dtype='float64')
+                # for m in range(int(temp[0] / imgSize[0])):
+                #     for n in range(int(temp[1] / imgSize[1])):
+                #         pre_item[m * imgSize[0] : (m + 1) * imgSize[0], n * imgSize[1] : (n + 1) * imgSize[1]] = torch.squeeze(model(t1))
 
-    im_channel = 5
-    x, y = trainDataLoader.get_train_data(number=5,batch_size=1,channel=im_channel,im_size=(128,128))
-    # 运行unet
+                pre_item = torch.squeeze(model(img_item))
+                img_item = torch.squeeze(img_item)
+                label_item = torch.squeeze(label_item)
 
-    model = Unet(in_ch=im_channel,out_ch=1)
-    print(model)
-    
-    train_model(model,x,y,100,0.05)
-    
-    print()
+                img_item = torch.index_select(img_item, 0, torch.tensor([2]))
+                img_item = torch.squeeze(img_item)
+                img_item = img_item.numpy()
+                pre_item = pre_item.detach().numpy()
+                label_item = label_item.numpy()
+                # 标签处简单处理，显示浅红色
+                img_item = img_item * 300
+                img_item[img_item < 0] = 0
+                img_item[img_item > 255] = 255
+                img_item = img_item.astype(np.uint8)
+                img_item = cv2.merge([img_item, img_item, img_item])
+                img_item[(label_item > 0) & (pre_item < 1)] = img_item[(label_item > 0) & (pre_item < 1)] * 0.6 + (80, 0, 0)
+                # TODO:pre_item的值在0~1之间，那么如何衡量有效值呢
+                img_item[(label_item <= 0) & (pre_item >= 1)] = img_item[(label_item <= 0) & (pre_item >= 1)] * 0.6 + (0, 80, 0)
+                img_item[(label_item > 0) & (pre_item >= 1)] = img_item[(label_item > 0) & (pre_item >= 1)] * 0.6 + (0, 0, 80)
+                figs[i][j].imshow(img_item)
+        plt.show()
+
 
 
